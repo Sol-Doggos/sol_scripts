@@ -10,14 +10,19 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	jsonFile string
+	jsonFile       string
+	collectionName string
 )
 
+type JsonType struct {
+	Array []string
+}
 type HeliusTokenRequestBody struct {
 	MintAccounts    []string `json:"mintAccounts"`
 	IncludeOffChain bool     `json:"includeOffChain"`
@@ -25,92 +30,95 @@ type HeliusTokenRequestBody struct {
 }
 
 type HeliusTokenResponse struct {
-	Account            string `json:"account"`
-	onChainAccountInfo struct {
-		accountInfo struct {
-			key        string `json:"key"`
-			isSigner   bool   `json:"isSigner"`
-			isWritable bool   `json:"isWritable"`
-			lamports   int    `json:"lamports"`
-			data       struct {
-				parsed struct {
-					info struct {
-						decimals        int    `json:"decimals"`
-						freezeAuthority string `json:"freezeAuthority"`
-						isInitialized   bool   `json:"isInitialized"`
-						mintAuthority   string `json:"mintAuthority"`
-						supply          string `json:"supply"`
-					} `json:"info"`
-					mintType string `json:"type"`
-				} `json:"parsed"`
-				program string `json:"program"`
-				space   int    `json:"space"`
-			} `json:"data"`
-			owner      string `json:"owner"`
-			executable bool   `json:"executable"`
-			rentEpoch  int    `json:"rentEpoch"`
-		} `json:"accountInfo"`
-		error_ string `json:"error"`
-	} `json:"onChainAccountInfo"`
-	onChainMetadata struct {
-		metadata struct {
-			tokenStandard   string `json:"tokenStandard"`
-			key             string `json:"key"`
-			updateAuthority string `json:"updateAuthority"`
-			mint            string `json:"mint"`
-			data            struct {
-				name                 string `json:"name"`
-				symbol               string `json:"symbol"`
-				uri                  string `json:"uri"`
-				sellerFeeBasisPoints int    `json:"sellerFeeBasisPoints"`
-				creators             []struct {
-					address  string `json:"address"`
-					verified bool   `json:"verified"`
-					share    int    `json:"share"`
-				} `json:"creators"`
-			} `json:"data"`
-			primarySaleHappened bool `json:"primarySaleHappened"`
-			isMutable           bool `json:"isMutable"`
-			editionNonce        int  `json:"editionNonce"`
-			uses                struct {
-				useMethod string `json:"useMethod"`
-				remaining int    `json:"remaining"`
-				total     int    `json:"total"`
-			} `json:"uses"`
-			collection struct {
-				key      string `json:"key"`
-				verified bool   `json:"verified"`
-			} `json:"collection"`
-		} `json:"metadata"`
-	} `json:"onChainMetadata"`
-	offChainMetadata offChainMetadata `json:"offChainMetadata"`
+	Account            string             `json:"account"`
+	OnChainAccountInfo onChainAccountInfo `json:"onChainAccountInfo"`
+	OnChainMetadata    onChainMetadata    `json:"onChainMetadata"`
+	OffChainMetadata   offChainMetadata   `json:"offChainMetadata"`
 }
 
-type offChainMetadata struct {
-	metadata struct {
-		attributes []struct {
-			traitType string `json:"trait_type"`
-			value     string `json:"value"`
-		} `json:"attributes"`
-		description string `json:"description"`
-		image       string `json:"image"`
-		name        string `json:"name"`
-		properties  struct {
-			category string `json:"category"`
-			creators []struct {
-				address string `json:"address"`
-				share   int    `json:"share"`
+type onChainMetadata struct {
+	Metadata struct {
+		TokenStandard   string `json:"tokenStandard"`
+		Key             string `json:"key"`
+		UpdateAuthority string `json:"updateAuthority"`
+		Mint            string `json:"mint"`
+		Data            struct {
+			Name                 string `json:"name"`
+			Symbol               string `json:"symbol"`
+			Uri                  string `json:"uri"`
+			SellerFeeBasisPoints int    `json:"sellerFeeBasisPoints"`
+			Creators             []struct {
+				Address  string `json:"address"`
+				Verified bool   `json:"verified"`
+				Share    int    `json:"share"`
 			} `json:"creators"`
-			files []struct {
-				type_ string `json:"type"`
-				uri   string `json:"uri"`
+		} `json:"data"`
+		PrimarySaleHappened bool `json:"primarySaleHappened"`
+		IsMutable           bool `json:"isMutable"`
+		EditionNonce        int  `json:"editionNonce"`
+		Uses                struct {
+			UseMethod string `json:"useMethod"`
+			Remaining int    `json:"remaining"`
+			Total     int    `json:"total"`
+		} `json:"uses"`
+		Collection struct {
+			Key      string `json:"key"`
+			Verified bool   `json:"verified"`
+		} `json:"collection"`
+	} `json:"metadata"`
+}
+
+type onChainAccountInfo struct {
+	AccountInfo struct {
+		Key        string `json:"key"`
+		IsSigner   bool   `json:"isSigner"`
+		IsWritable bool   `json:"isWritable"`
+		Lamports   int    `json:"lamports"`
+		Data       struct {
+			Parsed struct {
+				Info struct {
+					Decimals        int    `json:"decimals"`
+					FreezeAuthority string `json:"freezeAuthority"`
+					IsInitialized   bool   `json:"isInitialized"`
+					MintAuthority   string `json:"mintAuthority"`
+					Supply          string `json:"supply"`
+				} `json:"info"`
+				MintType string `json:"type"`
+			} `json:"parsed"`
+			Program string `json:"program"`
+			Space   int    `json:"space"`
+		} `json:"data"`
+		Owner      string `json:"owner"`
+		Executable bool   `json:"executable"`
+		RentEpoch  int    `json:"rentEpoch"`
+	} `json:"accountInfo"`
+	Error string `json:"error"`
+}
+type offChainMetadata struct {
+	Metadata struct {
+		Attributes []struct {
+			TraitType string `json:"trait_type"`
+			Value     string `json:"value"`
+		} `json:"attributes"`
+		Description string `json:"description"`
+		Image       string `json:"image"`
+		Name        string `json:"name"`
+		Properties  struct {
+			Category string `json:"category"`
+			Creators []struct {
+				Address string `json:"address"`
+				Share   int    `json:"share"`
+			} `json:"creators"`
+			Files []struct {
+				Type string `json:"type"`
+				Uri  string `json:"uri"`
 			} `json:"files"`
 		} `json:"properties"`
-		sellerFeeBasisPoints int    `json:"seller_fee_basis_points"`
-		symbol               string `json:"symbol"`
+		SellerFeeBasisPoints int    `json:"seller_fee_basis_points"`
+		Symbol               string `json:"symbol"`
 	} `json:"metadata"`
-	uri    string `json:"uri"`
-	error_ string `json:"error"`
+	Uri   string `json:"uri"`
+	Error string `json:"error"`
 }
 
 // pullMetadataCmd represents the pullMetadata command
@@ -125,7 +133,7 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		var mintList []string
-		// heliusUrl := "https://api.helius.xyz/v0/token-metadata?api-key=" + os.Getenv("HELIUS_API_KEY")
+
 		jsonContents, err := os.ReadFile(jsonFile)
 		if err != nil {
 			fmt.Println(err)
@@ -134,8 +142,19 @@ to quickly create a Cobra application.`,
 		if err != nil {
 			fmt.Println(err)
 		}
-		// jsonData, err := json.Marshal(mintList)
-		// rl := rate.NewLimiter(rate.Every(4*time.Second), 50)
+		metadataPath := filepath.Join(".", "downloads", collectionName, "metadata")
+		err = os.MkdirAll(metadataPath, os.ModePerm)
+		if err != nil {
+			os.Exit(1)
+		}
+
+		imagePath := filepath.Join(".", "downloads", collectionName, "images")
+		err = os.MkdirAll(imagePath, os.ModePerm)
+		if err != nil {
+			os.Exit(1)
+		}
+
+		// TODO - Split by 100 Mints
 		reqURL := "https://api.helius.xyz/v0/token-metadata?api-key=" + os.Getenv("HELIUS_API_KEY")
 		jsonBody := &HeliusTokenRequestBody{
 			MintAccounts:    mintList,
@@ -164,17 +183,50 @@ to quickly create a Cobra application.`,
 			fmt.Printf("error reading response body: %s\n", err)
 			os.Exit(1)
 		}
+
 		fmt.Printf("response body: %s\n", body)
 		var result []HeliusTokenResponse
 		if err := json.Unmarshal(body, &result); err != nil {
 			fmt.Printf("error unmarshalling response body: %s\n", err)
 		}
+		// fmt.Println(result)
 		for _, data := range result {
-			fmt.Println(data)
-			fmt.Println(data.offChainMetadata)
-			fmt.Println(data.onChainMetadata)
-			// fmt.Println(data.onChainMetadata.metadata.mint)
-			// fmt.Println(data.Account)
+			if data.OffChainMetadata.Error != "" {
+				// add error to error log
+				fmt.Println(data.Account + ": error pulling offchain metadata " + data.OffChainMetadata.Error)
+				continue
+			}
+			fmt.Println(metadataPath + data.Account + ".json")
+			file, err := os.Create(metadataPath + "/" + data.Account + ".json")
+			if err != nil {
+				fmt.Println(err)
+			}
+			defer file.Close()
+
+			encoder := json.NewEncoder(file)
+			encoder.Encode(data.OffChainMetadata.Metadata)
+
+			fmt.Println("Pulling image for " + data.Account + " from " + data.OffChainMetadata.Metadata.Image)
+			res, err := http.Get(data.OffChainMetadata.Metadata.Image)
+			if err != nil {
+				fmt.Printf("client: could not create suest: %s\n", err)
+				os.Exit(1)
+			}
+			defer res.Body.Close()
+
+			extension := determineExtension(data.OffChainMetadata.Metadata.Properties.Files[0].Type)
+
+			file, err = os.Create(imagePath + "/" + data.Account + extension)
+			if err != nil {
+				fmt.Println(err)
+			}
+			defer file.Close()
+
+			_, err = io.Copy(file, res.Body)
+			if err != nil {
+				fmt.Println(err)
+			}
+			fmt.Println("Successfully pulled image for " + data.Account)
 		}
 	},
 }
@@ -187,8 +239,20 @@ func init() {
 	// Cobra supports Persistent Flags which will work for this command
 	// and all subcommands, e.g.:
 	// pullMetadataCmd.PersistentFlags().String("foo", "", "A help for foo")
-	pullMetadataCmd.PersistentFlags().StringVar(&jsonFile, "jsonFile", "", "Where mint list json lives")
+	pullMetadataCmd.PersistentFlags().StringVar(&jsonFile, "mintList", "", "Where mint list json lives")
+	pullMetadataCmd.PersistentFlags().StringVar(&collectionName, "collectionName", "collection", "Collection name for which we pull data")
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
 	// pullMetadataCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+}
+
+func determineExtension(fileType string) string {
+	switch fileType {
+	case "image/gif":
+		return ".gif"
+	case "image/jpeg":
+		return ".jpeg"
+	default:
+		return ".png"
+	}
 }
