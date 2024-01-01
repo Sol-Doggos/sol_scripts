@@ -20,6 +20,10 @@ var (
 	collectionName string
 )
 
+type ErroredMint struct {
+	Mint  string
+	Error string
+}
 type JsonType struct {
 	Array []string
 }
@@ -133,6 +137,7 @@ This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		var mintList []string
+		// var errorList []ErroredMint
 
 		jsonContents, err := os.ReadFile(jsonFile)
 		if err != nil {
@@ -154,79 +159,88 @@ to quickly create a Cobra application.`,
 			os.Exit(1)
 		}
 
-		// TODO - Split by 100 Mints
 		reqURL := "https://api.helius.xyz/v0/token-metadata?api-key=" + os.Getenv("HELIUS_API_KEY")
-		jsonBody := &HeliusTokenRequestBody{
-			MintAccounts:    mintList,
-			IncludeOffChain: true,
-			DisableCache:    false,
-		}
-		// c := http.Client{}
-		// jsonBody := []byte(`{"mintAccounts": ` + jsonData + `, "includeOffChain": true, "disableCache": false }`)
-		jsonData, _ := json.MarshalIndent(jsonBody, "", "  ")
-		bodyReader := bytes.NewReader(jsonData)
-		req, err := http.NewRequest(http.MethodPost, reqURL, bodyReader)
-		if err != nil {
-			fmt.Printf("client: could not create request: %s\n", err)
-			os.Exit(1)
-		}
 
-		res, err := http.DefaultClient.Do(req)
-
-		if err != nil {
-			fmt.Printf("client: error making http request: %s\n", err)
-			os.Exit(1)
-		}
-
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			fmt.Printf("error reading response body: %s\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Printf("response body: %s\n", body)
-		var result []HeliusTokenResponse
-		if err := json.Unmarshal(body, &result); err != nil {
-			fmt.Printf("error unmarshalling response body: %s\n", err)
-		}
-		// fmt.Println(result)
-		for _, data := range result {
-			if data.OffChainMetadata.Error != "" {
-				// add error to error log
-				fmt.Println(data.Account + ": error pulling offchain metadata " + data.OffChainMetadata.Error)
-				continue
+		batch := 99
+		for i := 0; i < len(mintList); i += batch {
+			j := i + batch
+			if j > len(mintList) {
+				j = len(mintList)
 			}
-			fmt.Println(metadataPath + data.Account + ".json")
-			file, err := os.Create(metadataPath + "/" + data.Account + ".json")
-			if err != nil {
-				fmt.Println(err)
+			mintsInBatch := mintList[i:j]
+			fmt.Println(mintsInBatch)
+
+			jsonBody := &HeliusTokenRequestBody{
+				MintAccounts:    mintsInBatch,
+				IncludeOffChain: true,
+				DisableCache:    false,
 			}
-			defer file.Close()
 
-			encoder := json.NewEncoder(file)
-			encoder.Encode(data.OffChainMetadata.Metadata)
-
-			fmt.Println("Pulling image for " + data.Account + " from " + data.OffChainMetadata.Metadata.Image)
-			res, err := http.Get(data.OffChainMetadata.Metadata.Image)
+			jsonData, _ := json.MarshalIndent(jsonBody, "", "  ")
+			bodyReader := bytes.NewReader(jsonData)
+			req, err := http.NewRequest(http.MethodPost, reqURL, bodyReader)
 			if err != nil {
-				fmt.Printf("client: could not create suest: %s\n", err)
+				fmt.Printf("client: could not create request: %s\n", err)
 				os.Exit(1)
 			}
-			defer res.Body.Close()
 
-			extension := determineExtension(data.OffChainMetadata.Metadata.Properties.Files[0].Type)
+			res, err := http.DefaultClient.Do(req)
 
-			file, err = os.Create(imagePath + "/" + data.Account + extension)
 			if err != nil {
-				fmt.Println(err)
+				fmt.Printf("client: error making http request: %s\n", err)
+				os.Exit(1)
 			}
-			defer file.Close()
 
-			_, err = io.Copy(file, res.Body)
+			body, err := io.ReadAll(res.Body)
 			if err != nil {
-				fmt.Println(err)
+				fmt.Printf("error reading response body: %s\n", err)
+				os.Exit(1)
 			}
-			fmt.Println("Successfully pulled image for " + data.Account)
+
+			fmt.Printf("response body: %s\n", body)
+			var result []HeliusTokenResponse
+			if err := json.Unmarshal(body, &result); err != nil {
+				fmt.Printf("error unmarshalling response body: %s\n", err)
+			}
+			// fmt.Println(result)
+			for _, data := range result {
+				if data.OffChainMetadata.Error != "" {
+					// add error to error log
+					fmt.Println(data.Account + ": error pulling offchain metadata " + data.OffChainMetadata.Error)
+					continue
+				}
+				fmt.Println(metadataPath + data.Account + ".json")
+				file, err := os.Create(metadataPath + "/" + data.Account + ".json")
+				if err != nil {
+					fmt.Println(err)
+				}
+				defer file.Close()
+
+				encoder := json.NewEncoder(file)
+				encoder.Encode(data.OffChainMetadata.Metadata)
+
+				fmt.Println("Pulling image for " + data.Account + " from " + data.OffChainMetadata.Metadata.Image)
+				res, err := http.Get(data.OffChainMetadata.Metadata.Image)
+				if err != nil {
+					fmt.Printf("client: could not create suest: %s\n", err)
+					os.Exit(1)
+				}
+				defer res.Body.Close()
+
+				extension := determineExtension(data.OffChainMetadata.Metadata.Properties.Files[0].Type)
+
+				file, err = os.Create(imagePath + "/" + data.Account + extension)
+				if err != nil {
+					fmt.Println(err)
+				}
+				defer file.Close()
+
+				_, err = io.Copy(file, res.Body)
+				if err != nil {
+					fmt.Println(err)
+				}
+				fmt.Println("Successfully pulled image for " + data.Account)
+			}
 		}
 	},
 }
