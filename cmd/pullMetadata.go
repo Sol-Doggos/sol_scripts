@@ -6,6 +6,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,10 +21,6 @@ var (
 	collectionName string
 )
 
-type ErroredMint struct {
-	Mint  string
-	Error string
-}
 type JsonType struct {
 	Array []string
 }
@@ -118,7 +115,7 @@ type offChainMetadata struct {
 				Uri  string `json:"uri"`
 			} `json:"files"`
 		} `json:"properties"`
-		SellerFeeBasisPoints int    `json:"seller_fee_basis_points"`
+		SellerFeeBasisPoints int    `json:"sellerFeeBasisPoints"`
 		Symbol               string `json:"symbol"`
 	} `json:"metadata"`
 	Uri   string `json:"uri"`
@@ -136,30 +133,25 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		var mintList []string
-		// var errorList []ErroredMint
-
-		jsonContents, err := os.ReadFile(jsonFile)
+		mintList, err := readJsonFile(jsonFile)
 		if err != nil {
 			fmt.Println(err)
-		}
-		err = json.Unmarshal(jsonContents, &mintList)
-		if err != nil {
-			fmt.Println(err)
-		}
-		metadataPath := filepath.Join(".", "downloads", collectionName, "metadata")
-		err = os.MkdirAll(metadataPath, os.ModePerm)
-		if err != nil {
 			os.Exit(1)
 		}
 
-		imagePath := filepath.Join(".", "downloads", collectionName, "images")
-		err = os.MkdirAll(imagePath, os.ModePerm)
+		err = createFolder(collectionName, "metadata")
 		if err != nil {
+			fmt.Println(err)
 			os.Exit(1)
 		}
 
-		reqURL := "https://api.helius.xyz/v0/token-metadata?api-key=" + os.Getenv("HELIUS_API_KEY")
+		err = createFolder(collectionName, "images")
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		createFileIfNotExist(filepath.Join(".", "downloads", collectionName, "errors.txt"))
 
 		batch := 99
 		for i := 0; i < len(mintList); i += batch {
@@ -168,78 +160,31 @@ to quickly create a Cobra application.`,
 				j = len(mintList)
 			}
 			mintsInBatch := mintList[i:j]
-			fmt.Println(mintsInBatch)
-
-			jsonBody := &HeliusTokenRequestBody{
-				MintAccounts:    mintsInBatch,
-				IncludeOffChain: true,
-				DisableCache:    false,
-			}
-
-			jsonData, _ := json.MarshalIndent(jsonBody, "", "  ")
-			bodyReader := bytes.NewReader(jsonData)
-			req, err := http.NewRequest(http.MethodPost, reqURL, bodyReader)
+			result, err := pullMetadata(mintsInBatch)
 			if err != nil {
-				fmt.Printf("client: could not create request: %s\n", err)
+				fmt.Println(err)
 				os.Exit(1)
 			}
 
-			res, err := http.DefaultClient.Do(req)
-
-			if err != nil {
-				fmt.Printf("client: error making http request: %s\n", err)
-				os.Exit(1)
-			}
-
-			body, err := io.ReadAll(res.Body)
-			if err != nil {
-				fmt.Printf("error reading response body: %s\n", err)
-				os.Exit(1)
-			}
-
-			fmt.Printf("response body: %s\n", body)
-			var result []HeliusTokenResponse
-			if err := json.Unmarshal(body, &result); err != nil {
-				fmt.Printf("error unmarshalling response body: %s\n", err)
-			}
-			// fmt.Println(result)
 			for _, data := range result {
 				if data.OffChainMetadata.Error != "" {
-					// add error to error log
 					fmt.Println(data.Account + ": error pulling offchain metadata " + data.OffChainMetadata.Error)
+					addErrorToFile(data.Account, data.OffChainMetadata.Error)
 					continue
 				}
-				fmt.Println(metadataPath + data.Account + ".json")
-				file, err := os.Create(metadataPath + "/" + data.Account + ".json")
+				err = saveMetadata(data)
 				if err != nil {
-					fmt.Println(err)
+					addErrorToFile(data.Account, err.Error())
+					continue
 				}
-				defer file.Close()
 
-				encoder := json.NewEncoder(file)
-				encoder.Encode(data.OffChainMetadata.Metadata)
+				err = downloadImage(data.OffChainMetadata.Metadata.Image, data.Account)
 
-				fmt.Println("Pulling image for " + data.Account + " from " + data.OffChainMetadata.Metadata.Image)
-				res, err := http.Get(data.OffChainMetadata.Metadata.Image)
 				if err != nil {
-					fmt.Printf("client: could not create suest: %s\n", err)
-					os.Exit(1)
+					addErrorToFile(data.Account, err.Error())
+					continue
 				}
-				defer res.Body.Close()
 
-				extension := determineExtension(data.OffChainMetadata.Metadata.Properties.Files[0].Type)
-
-				file, err = os.Create(imagePath + "/" + data.Account + extension)
-				if err != nil {
-					fmt.Println(err)
-				}
-				defer file.Close()
-
-				_, err = io.Copy(file, res.Body)
-				if err != nil {
-					fmt.Println(err)
-				}
-				fmt.Println("Successfully pulled image for " + data.Account)
 			}
 		}
 	},
@@ -269,4 +214,160 @@ func determineExtension(fileType string) string {
 	default:
 		return ".png"
 	}
+}
+
+func readJsonFile(jsonFile string) ([]string, error) {
+	jsonContents, err := os.ReadFile(jsonFile)
+	if err != nil {
+		return []string{}, err
+	}
+	var mintList []string
+	err = json.Unmarshal(jsonContents, &mintList)
+	if err != nil {
+		return []string{}, err
+	}
+	return mintList, nil
+}
+
+func createFolder(collectionName, folderName string) error {
+	metadataPath := filepath.Join(".", "downloads", collectionName, folderName)
+	err := os.MkdirAll(metadataPath, os.ModePerm)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func pullMetadata(mintList []string) ([]HeliusTokenResponse, error) {
+	var reqURL = "https://api.helius.xyz/v0/token-metadata?api-key=" + os.Getenv("HELIUS_API_KEY")
+	jsonBody := &HeliusTokenRequestBody{
+		MintAccounts:    mintList,
+		IncludeOffChain: true,
+		DisableCache:    false,
+	}
+
+	jsonData, err := json.MarshalIndent(jsonBody, "", "  ")
+	if err != nil {
+		return []HeliusTokenResponse{}, err
+	}
+
+	bodyReader := bytes.NewReader(jsonData)
+	req, err := http.NewRequest(http.MethodPost, reqURL, bodyReader)
+	if err != nil {
+		return []HeliusTokenResponse{}, err
+	}
+
+	res, err := http.DefaultClient.Do(req)
+
+	if err != nil {
+		return []HeliusTokenResponse{}, err
+	}
+
+	if res.StatusCode != 200 {
+		return []HeliusTokenResponse{}, errors.New("request failed with status code: " + string(res.StatusCode))
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return []HeliusTokenResponse{}, err
+	}
+
+	fmt.Printf("response body: %s\n", body)
+	var result []HeliusTokenResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return []HeliusTokenResponse{}, err
+	}
+	return result, nil
+}
+
+func downloadImage(url string, mint string) error {
+
+	// fmt.Println("Pulling image for " + data.Account + " from " + data.OffChainMetadata.Metadata.Image)
+	// res, err := http.Get(data.OffChainMetadata.Metadata.Image)
+	// if err != nil {
+	// 	fmt.Printf("client: could not create suest: %s\n", err)
+	// 	os.Exit(1)
+	// }
+	// defer res.Body.Close()
+
+	// extension := determineExtension(data.OffChainMetadata.Metadata.Properties.Files[0].Type)
+
+	// file, err = os.Create(imagePath + "/" + data.Account + extension)
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// defer file.Close()
+
+	// _, err = io.Copy(file, res.Body)
+	// if err != nil {
+	// 	fmt.Println(err)
+	// }
+	// fmt.Println("Successfully pulled image for " + data.Account)
+
+	response, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	fileType := response.Header.Get("Content-Type")
+	fileExtension := determineExtension(fileType)
+	fileName := mint + fileExtension
+	filePath := filepath.Join(".", "downloads", collectionName, "images", fileName)
+	file, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = io.Copy(file, response.Body)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func createFileIfNotExist(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		file, err := os.Create(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+	}
+	return nil
+}
+
+func addErrorToFile(mint, error_ string) error {
+	file, err := os.OpenFile(filepath.Join(".", "downloads", collectionName, "errors.txt"), os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = file.WriteString(mint + ", " + error_ + "\n")
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func saveMetadata(data HeliusTokenResponse) error {
+	metadataPath := filepath.Join(".", "downloads", collectionName, "metadata")
+	file, err := os.Create(metadataPath + "/" + data.Account + ".json")
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	jsonData, err := json.MarshalIndent(data.OffChainMetadata.Metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	_, err = file.Write(jsonData)
+	if err != nil {
+		return err
+	}
+	return nil
 }
