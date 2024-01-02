@@ -19,7 +19,18 @@ import (
 var (
 	jsonFile       string
 	collectionName string
+	skipImages     bool
+	imageURLprefix string
+	change         bool
+	changeList     ChangeList
 )
+
+type ChangeList []Change
+
+type Change struct {
+	MintAccount string `json:"mint_account"`
+	NewURI      string `json:"new_uri"`
+}
 
 type JsonType struct {
 	Array []string
@@ -144,11 +155,12 @@ to quickly create a Cobra application.`,
 			fmt.Println(err)
 			os.Exit(1)
 		}
-
-		err = createFolder(collectionName, "images")
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+		if !skipImages {
+			err = createFolder(collectionName, "images")
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
 		}
 
 		createFileIfNotExist(filepath.Join(".", "downloads", collectionName, "errors.txt"))
@@ -167,24 +179,62 @@ to quickly create a Cobra application.`,
 			}
 
 			for _, data := range result {
+				var fileName string
+				var err error
 				if data.OffChainMetadata.Error != "" {
 					fmt.Println(data.Account + ": error pulling offchain metadata " + data.OffChainMetadata.Error)
 					addErrorToFile(data.Account, data.OffChainMetadata.Error)
 					continue
 				}
-				err = saveMetadata(data)
+				if !skipImages {
+					fileName, err = downloadImage(data.OffChainMetadata.Metadata.Image, data.Account)
+					if err != nil {
+						addErrorToFile(data.Account, err.Error())
+						continue
+					}
+				}
+
+				err = saveMetadata(data, fileName)
 				if err != nil {
 					addErrorToFile(data.Account, err.Error())
 					continue
 				}
 
-				err = downloadImage(data.OffChainMetadata.Metadata.Image, data.Account)
-
 				if err != nil {
 					addErrorToFile(data.Account, err.Error())
 					continue
 				}
 
+				if change {
+					// fmt.Println(data.Account)
+					// fmt.Println(imageURLprefix + fileName)
+					changeList = append(changeList, Change{
+						MintAccount: data.Account,
+						NewURI:      imageURLprefix + fileName,
+					})
+				}
+			}
+			if change {
+				fmt.Println(changeList)
+				jsonData, err := json.MarshalIndent(changeList, "", "  ")
+				if err != nil {
+					fmt.Println(err)
+					os.Exit(1)
+				}
+				fmt.Println(jsonData)
+
+				file, err := os.Create(filepath.Join(".", "downloads", collectionName, "changeList.json"))
+				if err != nil {
+					fmt.Println(err)
+					os.Exit(1)
+				}
+				defer file.Close()
+
+				_, err = file.Write(jsonData)
+				if err != nil {
+					fmt.Println(err)
+					os.Exit(1)
+				}
 			}
 		}
 	},
@@ -200,6 +250,9 @@ func init() {
 	// pullMetadataCmd.PersistentFlags().String("foo", "", "A help for foo")
 	pullMetadataCmd.PersistentFlags().StringVar(&jsonFile, "mintList", "", "Where mint list json lives")
 	pullMetadataCmd.PersistentFlags().StringVar(&collectionName, "collectionName", "collection", "Collection name for which we pull data")
+	pullMetadataCmd.PersistentFlags().BoolVar(&change, "change", false, "Change image path in metadata")
+	pullMetadataCmd.PersistentFlags().StringVar(&imageURLprefix, "imageURLprefix", "", "Prefix for image URL")
+	pullMetadataCmd.PersistentFlags().BoolVar(&skipImages, "skipImages", false, "Skip downloading images")
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
 	// pullMetadataCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
@@ -272,7 +325,6 @@ func pullMetadata(mintList []string) ([]HeliusTokenResponse, error) {
 		return []HeliusTokenResponse{}, err
 	}
 
-	fmt.Printf("response body: %s\n", body)
 	var result []HeliusTokenResponse
 	if err := json.Unmarshal(body, &result); err != nil {
 		return []HeliusTokenResponse{}, err
@@ -280,33 +332,10 @@ func pullMetadata(mintList []string) ([]HeliusTokenResponse, error) {
 	return result, nil
 }
 
-func downloadImage(url string, mint string) error {
-
-	// fmt.Println("Pulling image for " + data.Account + " from " + data.OffChainMetadata.Metadata.Image)
-	// res, err := http.Get(data.OffChainMetadata.Metadata.Image)
-	// if err != nil {
-	// 	fmt.Printf("client: could not create suest: %s\n", err)
-	// 	os.Exit(1)
-	// }
-	// defer res.Body.Close()
-
-	// extension := determineExtension(data.OffChainMetadata.Metadata.Properties.Files[0].Type)
-
-	// file, err = os.Create(imagePath + "/" + data.Account + extension)
-	// if err != nil {
-	// 	fmt.Println(err)
-	// }
-	// defer file.Close()
-
-	// _, err = io.Copy(file, res.Body)
-	// if err != nil {
-	// 	fmt.Println(err)
-	// }
-	// fmt.Println("Successfully pulled image for " + data.Account)
-
+func downloadImage(url string, mint string) (string, error) {
 	response, err := http.Get(url)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer response.Body.Close()
 
@@ -316,15 +345,15 @@ func downloadImage(url string, mint string) error {
 	filePath := filepath.Join(".", "downloads", collectionName, "images", fileName)
 	file, err := os.Create(filePath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer file.Close()
 
 	_, err = io.Copy(file, response.Body)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	return fileName, nil
 }
 
 func createFileIfNotExist(path string) error {
@@ -352,13 +381,18 @@ func addErrorToFile(mint, error_ string) error {
 	return nil
 }
 
-func saveMetadata(data HeliusTokenResponse) error {
+func saveMetadata(data HeliusTokenResponse, imageFileName string) error {
 	metadataPath := filepath.Join(".", "downloads", collectionName, "metadata")
 	file, err := os.Create(metadataPath + "/" + data.Account + ".json")
 	if err != nil {
 		return err
 	}
 	defer file.Close()
+	if !skipImages && change && imageURLprefix != "" {
+		newImageURL := imageURLprefix + imageFileName
+		data.OffChainMetadata.Metadata.Image = newImageURL
+		data.OffChainMetadata.Metadata.Properties.Files[0].Uri = newImageURL
+	}
 
 	jsonData, err := json.MarshalIndent(data.OffChainMetadata.Metadata, "", "  ")
 	if err != nil {
