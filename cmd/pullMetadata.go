@@ -1,5 +1,5 @@
 /*
-Copyright © 2023 NAME HERE <EMAIL ADDRESS>
+Copyright © 2023 NAME HERE <tuxr@pm.me>
 */
 package cmd
 
@@ -12,17 +12,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	jsonFile       string
-	collectionName string
-	skipImages     bool
-	imageURLprefix string
-	change         bool
-	changeList     ChangeList
+	jsonFile          string
+	collectionName    string
+	skipImages        bool
+	newMetadataPrefix string
+	changeList        ChangeList
 )
 
 type ChangeList []Change
@@ -126,7 +126,7 @@ type offChainMetadata struct {
 				Uri  string `json:"uri"`
 			} `json:"files"`
 		} `json:"properties"`
-		SellerFeeBasisPoints int    `json:"sellerFeeBasisPoints"`
+		SellerFeeBasisPoints int    `json:"seller_fee_basis_points"`
 		Symbol               string `json:"symbol"`
 	} `json:"metadata"`
 	Uri   string `json:"uri"`
@@ -144,6 +144,11 @@ Cobra is a CLI library for Go that empowers applications.
 This application is a tool to generate the needed files
 to quickly create a Cobra application.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		if jsonFile == "" {
+			fmt.Println("mintList file is required")
+			os.Exit(1)
+		}
+
 		mintList, err := readJsonFile(jsonFile)
 		if err != nil {
 			fmt.Println(err)
@@ -194,49 +199,38 @@ to quickly create a Cobra application.`,
 					}
 				}
 
-				err = saveMetadata(data, fileName)
+				jsonFileName, err := saveMetadata(data, fileName)
 				if err != nil {
 					addErrorToFile(data.Account, err.Error())
 					continue
 				}
 
-				if err != nil {
-					addErrorToFile(data.Account, err.Error())
+				if jsonFileName == "" {
+					addErrorToFile(data.Account, errors.New("jsonFileName is empty").Error())
 					continue
 				}
 
-				if change {
-					// fmt.Println(data.Account)
-					// fmt.Println(imageURLprefix + fileName)
-					changeList = append(changeList, Change{
-						MintAccount: data.Account,
-						NewURI:      imageURLprefix + fileName,
-					})
-				}
-			}
-			if change {
-				fmt.Println(changeList)
-				jsonData, err := json.MarshalIndent(changeList, "", "  ")
-				if err != nil {
-					fmt.Println(err)
-					os.Exit(1)
-				}
-				fmt.Println(jsonData)
-
-				file, err := os.Create(filepath.Join(".", "downloads", collectionName, "changeList.json"))
-				if err != nil {
-					fmt.Println(err)
-					os.Exit(1)
-				}
-				defer file.Close()
-
-				_, err = file.Write(jsonData)
-				if err != nil {
-					fmt.Println(err)
-					os.Exit(1)
+				if newMetadataPrefix != "" {
+					if !strings.HasPrefix(data.OffChainMetadata.Metadata.Image, newMetadataPrefix) {
+						changeList = append(changeList, Change{
+							MintAccount: data.Account,
+							NewURI:      newMetadataPrefix + jsonFileName,
+						})
+					} else {
+						fmt.Println(data.Account + ": already has requested prefix")
+					}
 				}
 			}
 		}
+		if newMetadataPrefix != "" {
+			err = createChangeListFile()
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+		}
+
+		fmt.Println("Done!")
 	},
 }
 
@@ -250,8 +244,7 @@ func init() {
 	// pullMetadataCmd.PersistentFlags().String("foo", "", "A help for foo")
 	pullMetadataCmd.PersistentFlags().StringVar(&jsonFile, "mintList", "", "Where mint list json lives")
 	pullMetadataCmd.PersistentFlags().StringVar(&collectionName, "collectionName", "collection", "Collection name for which we pull data")
-	pullMetadataCmd.PersistentFlags().BoolVar(&change, "change", false, "Change image path in metadata")
-	pullMetadataCmd.PersistentFlags().StringVar(&imageURLprefix, "imageURLprefix", "", "Prefix for image URL")
+	pullMetadataCmd.PersistentFlags().StringVar(&newMetadataPrefix, "newMetadataPrefix", "", "Prefix for image URL")
 	pullMetadataCmd.PersistentFlags().BoolVar(&skipImages, "skipImages", false, "Skip downloading images")
 	// Cobra supports local flags which will only run when this command
 	// is called directly, e.g.:
@@ -267,6 +260,25 @@ func determineExtension(fileType string) string {
 	default:
 		return ".png"
 	}
+}
+
+func createChangeListFile() error {
+	jsonData, err := json.MarshalIndent(changeList, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	file, err := os.Create(filepath.Join(".", "downloads", collectionName, "changeList.json"))
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	_, err = file.Write(jsonData)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func readJsonFile(jsonFile string) ([]string, error) {
@@ -296,7 +308,7 @@ func pullMetadata(mintList []string) ([]HeliusTokenResponse, error) {
 	jsonBody := &HeliusTokenRequestBody{
 		MintAccounts:    mintList,
 		IncludeOffChain: true,
-		DisableCache:    false,
+		DisableCache:    true,
 	}
 
 	jsonData, err := json.MarshalIndent(jsonBody, "", "  ")
@@ -381,27 +393,28 @@ func addErrorToFile(mint, error_ string) error {
 	return nil
 }
 
-func saveMetadata(data HeliusTokenResponse, imageFileName string) error {
+func saveMetadata(data HeliusTokenResponse, imageFileName string) (string, error) {
 	metadataPath := filepath.Join(".", "downloads", collectionName, "metadata")
-	file, err := os.Create(metadataPath + "/" + data.Account + ".json")
+	jsonFileName := data.Account + ".json"
+	file, err := os.Create(metadataPath + "/" + jsonFileName)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer file.Close()
-	if !skipImages && change && imageURLprefix != "" {
-		newImageURL := imageURLprefix + imageFileName
+	if !skipImages && newMetadataPrefix != "" && !strings.HasPrefix(data.OffChainMetadata.Metadata.Image, newMetadataPrefix) {
+		newImageURL := newMetadataPrefix + imageFileName
 		data.OffChainMetadata.Metadata.Image = newImageURL
 		data.OffChainMetadata.Metadata.Properties.Files[0].Uri = newImageURL
 	}
 
 	jsonData, err := json.MarshalIndent(data.OffChainMetadata.Metadata, "", "  ")
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	_, err = file.Write(jsonData)
 	if err != nil {
-		return err
+		return "", err
 	}
-	return nil
+	return jsonFileName, nil
 }
